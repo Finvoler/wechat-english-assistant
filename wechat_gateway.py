@@ -2,6 +2,9 @@
 """微信消息到英语学习系统的轻量网关。"""
 import sys
 import io
+import logging
+from contextlib import redirect_stdout, redirect_stderr
+
 from wechat_handler import handle_wechat_message
 
 
@@ -11,7 +14,18 @@ def main() -> int:
         return 1
 
     message = " ".join(sys.argv[1:]).strip()
-    result = handle_wechat_message(message)
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    previous_disable = logging.root.manager.disable
+
+    try:
+        # Only return the user-facing handler result. Internal logs and prints
+        # make the bridge agent unstable on long article generations.
+        logging.disable(logging.CRITICAL)
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            result = handle_wechat_message(message)
+    finally:
+        logging.disable(previous_disable)
 
     if result is None:
         # 使用sys.stdout.buffer.write来避免编码问题

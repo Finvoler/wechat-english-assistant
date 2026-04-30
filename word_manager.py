@@ -19,6 +19,29 @@ from database import SessionLocal
 from models import Vocabulary
 
 
+COMMON_WORD_BLACKLIST = {
+    "a", "an", "and", "are", "as", "at", "be", "book", "bye", "cat", "chat", "day",
+    "do", "dog", "english", "fine", "food", "for", "game", "go", "good", "hello", "help",
+    "hi", "home", "house", "i", "is", "it", "job", "like", "love", "man", "me", "morning",
+    "name", "nice", "no", "not", "ok", "okay", "people", "phone", "play", "school", "see",
+    "she", "shop", "sleep", "sorry", "student", "study", "teacher", "test", "thanks", "the",
+    "there", "they", "time", "today", "tomorrow", "tv", "very", "walk", "want", "water", "we",
+    "well", "what", "where", "who", "work", "world", "yes", "you",
+}
+
+
+def _is_worth_collecting(word: str) -> bool:
+    normalized = word.strip().lower()
+    if len(normalized) < 5:
+        return False
+    if normalized in COMMON_WORD_BLACKLIST:
+        return False
+    vowel_count = sum(1 for ch in normalized if ch in "aeiou")
+    if len(normalized) <= 6 and vowel_count <= 2:
+        return False
+    return True
+
+
 def _append_word_to_input_file(word, definition="", example=""):
     """将新词追加到 vocabulary_input.txt，避免微信与本地词库分叉。"""
     input_file = project_root / "vocabulary_input.txt"
@@ -41,20 +64,26 @@ def _append_word_to_input_file(word, definition="", example=""):
             f.write("\n")
         f.write(line + "\n")
 
-def add_word(word, definition="", example="", added_via="wechat"):
+def add_word(word, definition="", example="", added_via="manual", verbose=True):
     """添加新单词"""
     db = SessionLocal()
     try:
         word = word.strip().lower()
         if not word or not re.fullmatch(r"[a-zA-Z][a-zA-Z\-']*", word):
-            print(f"非法单词输入: {word}")
+            if verbose:
+                print(f"非法单词输入: {word}")
+            return False
+        if added_via in ["wechat", "wechat-quick"] and not _is_worth_collecting(word):
+            if verbose:
+                print(f"单词过于基础，已跳过: {word}")
             return False
 
         # 检查单词是否已存在
         existing = db.query(Vocabulary).filter_by(word=word).first()
         
         if existing:
-            print(f"单词 '{word}' 已存在")
+            if verbose:
+                print(f"单词 '{word}' 已存在")
             return False
         
         # 添加新单词
@@ -69,7 +98,8 @@ def add_word(word, definition="", example="", added_via="wechat"):
         db.add(new_word)
         db.commit()
         
-        print(f"单词 '{word}' 添加成功")
+        if verbose:
+            print(f"单词 '{word}' 添加成功")
 
         if added_via in ["wechat", "wechat-quick"]:
             _append_word_to_input_file(word, definition, example)
@@ -80,7 +110,8 @@ def add_word(word, definition="", example="", added_via="wechat"):
         return True
         
     except Exception as e:
-        print(f"添加单词时出错: {e}")
+        if verbose:
+            print(f"添加单词时出错: {e}")
         return False
     finally:
         db.close()
@@ -105,6 +136,52 @@ def list_words(limit=20):
         
         return result
         
+    finally:
+        db.close()
+
+
+def list_writing_vocab(limit=12, min_length=6):
+    """返回适合写作植入的本地词汇，优先近期/薄弱且定义较完整的词。"""
+    db = SessionLocal()
+    try:
+        rows = db.query(Vocabulary).order_by(
+            Vocabulary.lapses.desc(),
+            Vocabulary.review_count.asc(),
+            Vocabulary.created_at.desc(),
+        ).all()
+
+        result = []
+        seen = set()
+        for vocab in rows:
+            word = (vocab.word or "").strip().lower()
+            if not word or word in seen:
+                continue
+            if len(word) < min_length or not _is_worth_collecting(word):
+                continue
+
+            definition = (vocab.definition or "").strip()
+            example = (vocab.example or "").strip()
+            priority = 0
+            priority += min(len(word), 12)
+            if definition:
+                priority += 3
+            if example:
+                priority += 2
+            priority += min(int(getattr(vocab, "lapses", 0) or 0), 4)
+            priority -= min(int(getattr(vocab, "review_count", 0) or 0), 5)
+
+            result.append({
+                "word": word,
+                "definition": definition,
+                "example": example,
+                "review_count": int(getattr(vocab, "review_count", 0) or 0),
+                "lapses": int(getattr(vocab, "lapses", 0) or 0),
+                "priority": priority,
+            })
+            seen.add(word)
+
+        result.sort(key=lambda item: (-item["priority"], item["word"]))
+        return result[:limit]
     finally:
         db.close()
 
@@ -164,6 +241,8 @@ def process_wechat_command(command):
         if success:
             return f"✅ 单词 '{word}' 已添加到生词本"
         else:
+            if not _is_worth_collecting(word):
+                return f"ℹ️ '{word}' 过于基础，未加入生词本。请优先收集托福/学术词。"
             return f"❌ 添加单词失败"
     
     elif cmd == "list":
@@ -211,6 +290,8 @@ def add_word_from_plain_text(message_text):
     text = message_text.strip()
     if not re.fullmatch(r"[a-zA-Z][a-zA-Z\-']*", text):
         return None
+    if not _is_worth_collecting(text):
+        return "ℹ️ 这个词过于基础，已跳过。请发更偏托福/学术的词。"
 
     success = add_word(text, added_via="wechat-quick")
     if success:

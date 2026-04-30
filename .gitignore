@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+
+# Local runtime config
+llm_config.json
+
+# Local databases and study records
+*.db
+data/
+output/
+backup/
+vocabulary_input.txt
+daily_english_log.txt
+output_*.txt
+
+# Local environments
+.venv/
+venv/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

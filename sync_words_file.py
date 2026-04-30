@@ -31,7 +31,7 @@ def import_words(file_path: Path) -> tuple[int, int]:
         definition = parts[1] if len(parts) > 1 else ""
         example = parts[2] if len(parts) > 2 else ""
 
-        ok = add_word(word, definition, example)
+        ok = add_word(word, definition, example, added_via="file-sync", verbose=False)
         if ok:
             added += 1
         else:
